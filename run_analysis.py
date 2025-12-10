@@ -1,218 +1,337 @@
 # src/run_analysis.py
-import pandas as pd
 import os
+import pandas as pd
+import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # --- Configuration ---
 PROCESSED_DATA_DIR = os.path.join(os.path.dirname(__file__), '../data/processed')
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), '../results') # Not strictly needed here, but good practice
-os.makedirs(RESULTS_DIR, exist_ok=True) # Ensure results directory exists
+RESULTS_DIR = os.path.join(os.path.dirname(__file__), '../results')
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
+CLEANED_ARTISTS_CSV = os.path.join(PROCESSED_DATA_DIR, 'cleaned_artists_data.csv')
+CLEANED_CONTENT_CSV = os.path.join(PROCESSED_DATA_DIR, 'cleaned_content_data.csv')
+
+
+# ----------------------
+# Helper utilities
+# ----------------------
+def first_existing_column(df, candidates, default=None):
+    """Return first column name in candidates that exists in df, otherwise default."""
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return default
+
+def safe_to_datetime(series):
+    """Convert series to datetime safely (returns series of datetimes or NaT)."""
+    return pd.to_datetime(series, errors='coerce')
+
+def normalize_columns(df, cols):
+    """Min-Max normalize specified columns and return new df with 'norm_' prefixed columns.
+       If a column is constant or missing, create norm column filled with 0.0"""
+    df_out = df.copy()
+    scaler = MinMaxScaler()
+    for col in cols:
+        if col in df_out.columns and not df_out[col].isnull().all() and df_out[col].nunique(dropna=True) > 1:
+            vals = df_out[[col]].fillna(0).astype(float)
+            df_out[f'norm_{col}'] = scaler.fit_transform(vals)
+        else:
+            # column missing or constant -> set normalized to 0.0
+            df_out[f'norm_{col}'] = 0.0
+    return df_out
+
+
+# ----------------------
+# Load cleaned data
+# ----------------------
 def load_cleaned_data():
-    """Loads the cleaned CSV data from data/processed."""
-    cleaned_artists_filepath = os.path.join(PROCESSED_DATA_DIR, 'cleaned_artists_data.csv')
-    cleaned_content_filepath = os.path.join(PROCESSED_DATA_DIR, 'cleaned_content_data.csv')
-
-    if not os.path.exists(cleaned_artists_filepath) or not os.path.exists(cleaned_content_filepath):
-        print("Cleaned data files not found. Please run clean_data.py first.")
+    if not os.path.exists(CLEANED_ARTISTS_CSV) or not os.path.exists(CLEANED_CONTENT_CSV):
+        print("Cleaned data files not found. Please run clean_data.py first and ensure CSVs exist:")
+        print(f"  - {CLEANED_ARTISTS_CSV}")
+        print(f"  - {CLEANED_CONTENT_CSV}")
         return pd.DataFrame(), pd.DataFrame()
 
-    df_artists = pd.read_csv(cleaned_artists_filepath)
-    df_content = pd.read_csv(cleaned_content_filepath)
+    df_artists = pd.read_csv(CLEANED_ARTISTS_CSV)
+    df_content = pd.read_csv(CLEANED_CONTENT_CSV)
 
-    # Convert datetime columns back to datetime objects
-    df_artists['collection_timestamp'] = pd.to_datetime(df_artists['collection_timestamp'])
-    df_content['collection_timestamp'] = pd.to_datetime(df_content['collection_timestamp'])
-    df_content['published_at'] = pd.to_datetime(df_content['published_at'])
-    df_content['release_date'] = pd.to_datetime(df_content['release_date'])
+    # Normalize column names (some pipelines may call things differently)
+    # Common expected artist columns: 'artist_name' (identifier), 'tiktok_views', 'tiktok_video_count',
+    # 'yt_subscribers' or 'subscriber_count', 'yt_total_views' or 'view_count' (artist-level)
+    # Common content columns (videos/tracks): 'view_count','like_count','comment_count','published_at'
+
+    # Convert possible datetime columns
+    if 'collection_timestamp' in df_artists.columns:
+        df_artists['collection_timestamp'] = safe_to_datetime(df_artists['collection_timestamp'])
+    if 'collection_timestamp' in df_content.columns:
+        df_content['collection_timestamp'] = safe_to_datetime(df_content['collection_timestamp'])
+    if 'published_at' in df_content.columns:
+        df_content['published_at'] = safe_to_datetime(df_content['published_at'])
+    if 'release_date' in df_content.columns:
+        df_content['release_date'] = safe_to_datetime(df_content['release_date'])
 
     return df_artists, df_content
 
-def normalize_columns(df, columns_to_normalize):
-    """Applies Min-Max scaling to specified columns in a DataFrame."""
-    scaler = MinMaxScaler()
-    df_normalized = df.copy()
-    for col in columns_to_normalize:
-        if col in df.columns and not df[col].isnull().all() and df[col].nunique() > 1:
-            df_normalized[f'norm_{col}'] = scaler.fit_transform(df[[col]])
-        else: # Handle cases where column is all same value or all NaN
-            df_normalized[f'norm_{col}'] = 0.0 # Or 0.5 if it's considered 'average'
-    return df_normalized
 
+# ----------------------
+# Main analysis function
+# ----------------------
 def perform_analysis(df_artists, df_content):
     """
-    Performs normalization, calculates combined popularity index,
-    and conducts temporal and sentiment analysis.
+    1) Compute YouTube engagement rates from content-level data
+    2) Aggregate per-artist metrics (avg engagement, sentiment)
+    3) Normalize metrics and compute Combined Popularity Index using Option 2 weights
+    4) Temporal analysis for YouTube content lifespan
+    5) Save analyzed CSVs
     """
-    print("Starting data analysis...")
 
-    # --- 1. Normalization ---
-    # First, calculate average video engagement and sentiment for each artist
-    df_youtube_videos = df_content[df_content['data_type'] == 'youtube_video'].copy()
+    print("Starting analysis...")
 
-    # Ensure no division by zero for engagement rate calculation if needed later
-    df_youtube_videos.loc[df_youtube_videos['view_count'] == 0, 'engagement_rate'] = 0
+    if df_artists.empty or df_content.empty:
+        print("Empty input dataframes — aborting analysis.")
+        return None
 
-    avg_yt_engagement = df_youtube_videos.groupby('artist_id')['engagement_rate'].mean().reset_index()
-    avg_yt_engagement.rename(columns={'engagement_rate': 'avg_yt_engagement_rate'}, inplace=True)
-
-    avg_yt_sentiment = df_youtube_videos.groupby('artist_id')[['sentiment_positive_ratio', 'sentiment_negative_ratio', 'sentiment_neutral_ratio']].mean().reset_index()
-
-    # Merge these back into df_artists
-    df_artists = pd.merge(df_artists, avg_yt_engagement, on='artist_id', how='left')
-    df_artists = pd.merge(df_artists, avg_yt_sentiment, on='artist_id', how='left')
-    # Fill NaN for artists with no YouTube videos
-    df_artists['avg_yt_engagement_rate'] = df_artists['avg_yt_engagement_rate'].fillna(0)
-    df_artists[['sentiment_positive_ratio', 'sentiment_negative_ratio', 'sentiment_neutral_ratio']] = \
-        df_artists[['sentiment_positive_ratio', 'sentiment_negative_ratio', 'sentiment_neutral_ratio']].fillna(0)
-
-
-    # Normalize key metrics for artists
-    artist_metrics_to_normalize = [
-        'spotify_followers',
-        'spotify_popularity',
-        'yt_subscribers',
-        'yt_total_views',
-        'avg_yt_engagement_rate' # Normalized average engagement rate
-    ]
-    df_artists_normalized = normalize_columns(df_artists, artist_metrics_to_normalize)
+    # Use 'artist_name' as primary id; if not present, try 'artist_id' or 'artist'
+    if 'artist_name' not in df_artists.columns:
+        if 'artist_id' in df_artists.columns:
+            df_artists.rename(columns={'artist_id': 'artist_name'}, inplace=True)
+        elif 'artist' in df_artists.columns:
+            df_artists.rename(columns={'artist': 'artist_name'}, inplace=True)
+        else:
+            # As last resort, create artist_name from file if possible — but prefer the cleaned pipeline to provide it
+            print("Warning: 'artist_name' not found in artist file. Ensure cleaned_artists_data.csv has artist_name column.")
     
-    # --- 2. Combined Popularity Index ---
-    weights = {
-        'spotify_popularity': 0.25,
-        'spotify_followers': 0.15,
-        'yt_subscribers': 0.15,
-        'yt_total_views': 0.25,
-        'avg_yt_engagement_rate': 0.20
-    }
+    # Ensure content has artist_name too
+    if 'artist_name' not in df_content.columns:
+        if 'artist_id' in df_content.columns:
+            df_content.rename(columns={'artist_id': 'artist_name'}, inplace=True)
+        elif 'artist' in df_content.columns:
+            df_content.rename(columns={'artist': 'artist_name'}, inplace=True)
 
-    # Calculate index using normalized values
-    df_artists_normalized['combined_popularity_index'] = (
-        weights['spotify_popularity'] * df_artists_normalized['norm_spotify_popularity'] +
-        weights['spotify_followers'] * df_artists_normalized['norm_spotify_followers'] +
-        weights['yt_subscribers'] * df_artists_normalized['norm_yt_subscribers'] +
-        weights['yt_total_views'] * df_artists_normalized['norm_yt_total_views'] +
-        weights['avg_yt_engagement_rate'] * df_artists_normalized['norm_avg_yt_engagement_rate']
+    # 1) Compute engagement_rate for YouTube videos in content-level data
+    # Engagement rate defined as (like_count + comment_count) / view_count
+    # Use safe columns names
+    view_col = first_existing_column(df_content, ['view_count', 'views', 'yt_view_count'])
+    like_col = first_existing_column(df_content, ['like_count', 'likes', 'yt_like_count'])
+    comment_col = first_existing_column(df_content, ['comment_count', 'comments', 'yt_comment_count'])
+
+    df_content = df_content.copy()
+    if view_col:
+        df_content['view_count_safe'] = pd.to_numeric(df_content[view_col], errors='coerce').fillna(0).astype(float)
+    else:
+        df_content['view_count_safe'] = 0.0
+
+    if like_col:
+        df_content['like_count_safe'] = pd.to_numeric(df_content[like_col], errors='coerce').fillna(0).astype(float)
+    else:
+        df_content['like_count_safe'] = 0.0
+
+    if comment_col:
+        df_content['comment_count_safe'] = pd.to_numeric(df_content[comment_col], errors='coerce').fillna(0).astype(float)
+    else:
+        df_content['comment_count_safe'] = 0.0
+
+    # engagement rate (protect div by zero)
+    df_content['engagement_rate'] = 0.0
+    mask = df_content['view_count_safe'] > 0
+    df_content.loc[mask, 'engagement_rate'] = (
+        (df_content.loc[mask, 'like_count_safe'] + df_content.loc[mask, 'comment_count_safe']) /
+        df_content.loc[mask, 'view_count_safe']
     )
 
-    # --- 3. Temporal Analysis (Revised Focus) ---
-    # a. Content Lifespan Performance
-    df_content_with_age = df_content.copy()
-    collection_date = df_content_with_age['collection_timestamp'].iloc[0] # All collected at same time
+    # 2) Aggregate per-artist YouTube metrics
+    yt_videos = df_content[df_content.get('data_type', '') == 'youtube_video'] if 'data_type' in df_content.columns else df_content
+    if 'data_type' in df_content.columns:
+        yt_videos = df_content[df_content['data_type'] == 'youtube_video']
+    else:
+        # If no data_type, try to detect youtube rows by presence of published_at or view_count
+        yt_videos = df_content[df_content['view_count_safe'] > 0]
 
-    # Calculate age of content at time of collection
-    df_content_with_age.loc[df_content_with_age['data_type'] == 'youtube_video', 'age_days'] = \
-        (collection_date - df_content_with_age[df_content_with_age['data_type'] == 'youtube_video']['published_at']).dt.days
+    # Average engagement and sentiment per artist
+    avg_yt_engagement = yt_videos.groupby('artist_name')['engagement_rate'].mean().reset_index().rename(columns={'engagement_rate':'avg_yt_engagement_rate'})
 
-    df_content_with_age.loc[df_content_with_age['data_type'] == 'spotify_track', 'age_days'] = \
-        (collection_date - df_content_with_age[df_content_with_age['data_type'] == 'spotify_track']['release_date']).dt.days
+    # Sentiment: average of sentiment_positive_ratio if present
+    sentiment_col = first_existing_column(yt_videos, ['sentiment_positive_ratio','sentiment_positive','pos_sentiment'])
+    if sentiment_col:
+        avg_sent = yt_videos.groupby('artist_name')[[sentiment_col]].mean().reset_index().rename(columns={sentiment_col:'avg_sentiment_positive'})
+    else:
+        avg_sent = pd.DataFrame({'artist_name': df_artists['artist_name'], 'avg_sentiment_positive': 0.0})
 
-    # Categorize content age
+    # Merge these into artist-level df
+    df_artists = pd.merge(df_artists, avg_yt_engagement, on='artist_name', how='left')
+    df_artists = pd.merge(df_artists, avg_sent, on='artist_name', how='left')
+    df_artists['avg_yt_engagement_rate'] = df_artists['avg_yt_engagement_rate'].fillna(0.0)
+    if 'avg_sentiment_positive' in df_artists.columns:
+        df_artists['avg_sentiment_positive'] = df_artists['avg_sentiment_positive'].fillna(0.0)
+    else:
+        df_artists['avg_sentiment_positive'] = 0.0
+
+    # 3) Find artist-level YouTube subscriber and total view columns (artist summary file)
+    # Common names: 'yt_subscribers', 'subscriber_count', 'channel_subscribers'
+    yt_sub_col = first_existing_column(df_artists, ['yt_subscribers','subscriber_count','channel_subscribers','subscribers'])
+    yt_views_col = first_existing_column(df_artists, ['yt_total_views','view_count','channel_view_count','total_views'])
+
+    # Convert to numeric safely
+    if yt_sub_col:
+        df_artists['yt_subscribers_numeric'] = pd.to_numeric(df_artists[yt_sub_col], errors='coerce').fillna(0).astype(float)
+    else:
+        df_artists['yt_subscribers_numeric'] = 0.0
+
+    if yt_views_col:
+        df_artists['yt_total_views_numeric'] = pd.to_numeric(df_artists[yt_views_col], errors='coerce').fillna(0).astype(float)
+    else:
+        df_artists['yt_total_views_numeric'] = 0.0
+
+    # 4) Find TikTok metrics in artist-level df (tiktok_views, tiktok_video_count)
+    tik_views_col = first_existing_column(df_artists, ['tiktok_views','tiktok_total_views','tk_views'])
+    tik_vcount_col = first_existing_column(df_artists, ['tiktok_video_count','tiktok_videos','tk_video_count'])
+
+    if tik_views_col:
+        df_artists['tiktok_views_numeric'] = pd.to_numeric(df_artists[tik_views_col], errors='coerce').fillna(0).astype(float)
+    else:
+        df_artists['tiktok_views_numeric'] = 0.0
+
+    if tik_vcount_col:
+        df_artists['tiktok_video_count_numeric'] = pd.to_numeric(df_artists[tik_vcount_col], errors='coerce').fillna(0).astype(float)
+    else:
+        df_artists['tiktok_video_count_numeric'] = 0.0
+
+    # 5) Build normalized df using Min-Max scaling for chosen metrics
+    metrics_to_norm = [
+        'yt_subscribers_numeric',
+        'yt_total_views_numeric',
+        'avg_yt_engagement_rate',
+        'tiktok_views_numeric',
+        'tiktok_video_count_numeric'
+    ]
+
+    df_artists_norm = normalize_columns(df_artists, metrics_to_norm)
+
+    # 6) Combined Popularity Index (Option 2 weights)
+    weights = {
+        'yt_engagement_rate': 0.35,
+        'yt_total_views': 0.20,
+        'yt_subscribers': 0.15,
+        'tiktok_views': 0.20,
+        'tiktok_video_count': 0.10
+    }
+
+    df_artists_norm['combined_popularity_index'] = (
+        weights['yt_engagement_rate'] * df_artists_norm['norm_avg_yt_engagement_rate'] +
+        weights['yt_total_views'] * df_artists_norm['norm_yt_total_views_numeric'] +
+        weights['yt_subscribers'] * df_artists_norm['norm_yt_subscribers_numeric'] +
+        weights['tiktok_views'] * df_artists_norm['norm_tiktok_views_numeric'] +
+        weights['tiktok_video_count'] * df_artists_norm['norm_tiktok_video_count_numeric']
+    )
+
+    # 7) Temporal analysis for YouTube content: age categories & average performance
+    if 'collection_timestamp' in df_content.columns:
+        collection_date = df_content['collection_timestamp'].dropna().iloc[0] if not df_content['collection_timestamp'].dropna().empty else pd.Timestamp.now()
+    else:
+        collection_date = pd.Timestamp.now()
+
+    # compute age_days for youtube videos
+    df_content_age = df_content.copy()
+    if 'published_at' in df_content_age.columns:
+        df_content_age['published_at_dt'] = safe_to_datetime(df_content_age['published_at'])
+        df_content_age['age_days'] = (pd.to_datetime(collection_date) - df_content_age['published_at_dt']).dt.days
+    else:
+        df_content_age['age_days'] = np.nan
+
     def categorize_age(days):
-        if pd.isna(days) or days < 0: # Handle future dates or missing
+        if pd.isna(days):
             return 'Unknown'
+        if days < 0:
+            return 'Future'
         if days <= 30: return '0-1 Month'
         if days <= 90: return '1-3 Months'
         if days <= 365: return '3-12 Months'
         if days <= 365 * 3: return '1-3 Years'
         return '3+ Years'
 
-    df_content_with_age['age_category'] = df_content_with_age['age_days'].apply(categorize_age)
-    df_content_with_age = df_content_with_age[df_content_with_age['age_category'] != 'Unknown'].copy() # Remove unknown ages
+    df_content_age['age_category'] = df_content_age['age_days'].apply(categorize_age)
 
-    # Aggregate performance by age category per artist
-    # For YouTube videos: average views and engagement
-    avg_yt_performance_by_age = df_content_with_age[df_content_with_age['data_type'] == 'youtube_video'].groupby(['artist_id', 'age_category']).agg(
-        avg_views=('view_count', 'mean'),
-        avg_engagement=('engagement_rate', 'mean'),
-        num_videos=('video_id', 'count')
-    ).reset_index()
+    # Filter to youtube videos only (if data_type present)
+    if 'data_type' in df_content_age.columns:
+        yt_content_age = df_content_age[df_content_age['data_type'] == 'youtube_video'].copy()
+    else:
+        yt_content_age = df_content_age[df_content_age['view_count_safe'] > 0].copy()
 
-    # For Spotify tracks: average track popularity
-    avg_spotify_performance_by_age = df_content_with_age[df_content_with_age['data_type'] == 'spotify_track'].groupby(['artist_id', 'age_category']).agg(
-        avg_track_popularity=('track_popularity', 'mean'),
-        num_tracks=('track_id', 'count')
-    ).reset_index()
+    # aggregate performance per artist / age_category
+    if not yt_content_age.empty:
+        yt_age_perf = yt_content_age.groupby(['artist_name', 'age_category']).agg(
+            avg_views=('view_count_safe', 'mean'),
+            avg_engagement=('engagement_rate', 'mean'),
+            num_videos=('video_id' if 'video_id' in yt_content_age.columns else 'view_count_safe', 'count')
+        ).reset_index()
+    else:
+        yt_age_perf = pd.DataFrame(columns=['artist_name','age_category','avg_views','avg_engagement','num_videos'])
 
+    # 8) Release frequency estimate: videos per month for YouTube using published_at span
+    release_list = []
+    for artist in df_artists_norm['artist_name'].unique():
+        artist_videos = yt_content_age[yt_content_age['artist_name'] == artist]
+        published = artist_videos['published_at_dt'].dropna() if 'published_at_dt' in artist_videos.columns else pd.Series([], dtype='datetime64[ns]')
+        if not published.empty:
+            earliest = published.min()
+            latest = published.max()
+            span_months = max( (latest - earliest).days / 30.4375, 1.0)
+            avg_videos_per_month = len(published) / span_months
+        else:
+            avg_videos_per_month = 0.0
+        release_list.append({'artist_name': artist, 'avg_yt_videos_per_month': avg_videos_per_month})
+    df_release_freq = pd.DataFrame(release_list)
 
-    # b. Release Frequency & Popularity (simple approximation)
-    release_frequency_data = []
-    for artist_id in df_artists['artist_id'].unique():
-        artist_content = df_content_with_age[df_content_with_age['artist_id'] == artist_id]
-        
-        # Count unique release months for YouTube videos
-        yt_releases = artist_content[artist_content['data_type'] == 'youtube_video']['published_at'].dropna()
-        num_yt_months = len(yt_releases.dt.to_period('M').unique())
-        num_yt_videos = len(yt_releases)
+    df_artists_final = pd.merge(df_artists_norm, df_release_freq, on='artist_name', how='left')
+    df_artists_final['avg_yt_videos_per_month'] = df_artists_final['avg_yt_videos_per_month'].fillna(0.0)
 
-        # Count unique release months for Spotify tracks
-        sp_releases = artist_content[artist_content['data_type'] == 'spotify_track']['release_date'].dropna()
-        num_sp_months = len(sp_releases.dt.to_period('M').unique())
-        num_sp_tracks = len(sp_releases)
-        
-        # Calculate average content per month over the collected content's span
-        # This is an approximation as we don't have *all* content for *all* time
-        earliest_yt = yt_releases.min() if not yt_releases.empty else pd.NaT
-        latest_yt = yt_releases.max() if not yt_releases.empty else pd.NaT
-        yt_span_months = ((latest_yt - earliest_yt).days / 30.4375) if not pd.isna(earliest_yt) and not pd.isna(latest_yt) else 0
-        avg_yt_content_per_month = num_yt_videos / yt_span_months if yt_span_months > 0 else 0
+    # 9) Genre or category insights (if 'genres' column exists)
+    if 'genres' in df_artists_final.columns:
+        # assume genres stored as a list-like string, take first as primary
+        df_artists_final['primary_genre'] = df_artists_final['genres'].fillna('Unknown').apply(lambda x: x.split(',')[0] if isinstance(x, str) else 'Unknown')
+    else:
+        df_artists_final['primary_genre'] = 'Unknown'
 
-        earliest_sp = sp_releases.min() if not sp_releases.empty else pd.NaT
-        latest_sp = sp_releases.max() if not sp_releases.empty else pd.NaT
-        sp_span_months = ((latest_sp - earliest_sp).days / 30.4375) if not pd.isna(earliest_sp) and not pd.isna(latest_sp) else 0
-        avg_sp_content_per_month = num_sp_tracks / sp_span_months if sp_span_months > 0 else 0
-
-        release_frequency_data.append({
-            'artist_id': artist_id,
-            'avg_yt_content_per_month': avg_yt_content_per_month,
-            'avg_sp_content_per_month': avg_sp_content_per_month,
-            'total_content_count': num_yt_videos + num_sp_tracks # Total number of content items we fetched
-        })
-    df_release_frequency = pd.DataFrame(release_frequency_data)
-    df_artists_normalized = pd.merge(df_artists_normalized, df_release_frequency, on='artist_id', how='left')
-    df_artists_normalized[['avg_yt_content_per_month', 'avg_sp_content_per_month', 'total_content_count']] = \
-        df_artists_normalized[['avg_yt_content_per_month', 'avg_sp_content_per_month', 'total_content_count']].fillna(0)
-
-
-    # --- 4. Genre-Specific Insights (Aggregating to genre level) ---
-    # First, add the primary genre to the main artist dataframe for easier grouping
-    # For now, let's just use the first genre listed for simplicity
-    df_artists_normalized['primary_genre'] = df_artists_normalized['genres'].apply(lambda x: x.split(', ')[0] if pd.notna(x) and x else 'Unknown')
-    
-    genre_metrics = df_artists_normalized.groupby('primary_genre').agg(
+    genre_metrics = df_artists_final.groupby('primary_genre').agg(
         avg_popularity_index=('combined_popularity_index', 'mean'),
-        avg_spotify_pop=('norm_spotify_popularity', 'mean'),
-        avg_yt_subscribers=('norm_yt_subscribers', 'mean'),
-        num_artists=('artist_id', 'count')
+        avg_yt_subscribers=('norm_yt_subscribers_numeric', 'mean'),
+        avg_tiktok_views=('norm_tiktok_views_numeric', 'mean'),
+        num_artists=('artist_name', 'count')
     ).reset_index()
 
+    # ------------------------------
+    # Save outputs back to processed dir
+    # ------------------------------
+    analyzed_artists_fp = os.path.join(PROCESSED_DATA_DIR, 'analyzed_artists_data.csv')
+    yt_age_perf_fp = os.path.join(PROCESSED_DATA_DIR, 'analyzed_yt_age_performance.csv')
+    genre_metrics_fp = os.path.join(PROCESSED_DATA_DIR, 'analyzed_genre_metrics.csv')
 
-    print("Data analysis complete.")
-    return df_artists_normalized, avg_yt_performance_by_age, avg_spotify_performance_by_age, genre_metrics
+    df_artists_final.to_csv(analyzed_artists_fp, index=False)
+    yt_age_perf.to_csv(yt_age_perf_fp, index=False)
+    genre_metrics.to_csv(genre_metrics_fp, index=False)
 
+    print(f"Saved analyzed artists data -> {analyzed_artists_fp}")
+    print(f"Saved YouTube age performance -> {yt_age_perf_fp}")
+    print(f"Saved genre metrics -> {genre_metrics_fp}")
+
+    print("\nTop artists by combined_popularity_index:")
+    display_cols = ['artist_name', 'combined_popularity_index', 'primary_genre', 'avg_yt_videos_per_month']
+    if 'combined_popularity_index' in df_artists_final.columns:
+        print(df_artists_final[display_cols].sort_values('combined_popularity_index', ascending=False).head(10).to_string(index=False))
+    else:
+        print("No combined index computed.")
+
+    return df_artists_final, yt_age_perf, genre_metrics
+
+
+# ----------------------
+# Run as script
+# ----------------------
 if __name__ == "__main__":
     df_artists, df_content = load_cleaned_data()
-
-    if not df_artists.empty and not df_content.empty:
-        df_analyzed_artists, df_yt_age_performance, df_sp_age_performance, df_genre_metrics = perform_analysis(df_artists, df_content)
-
-        # You might want to save these analyzed dataframes as well for easier visualization
-        df_analyzed_artists.to_csv(os.path.join(PROCESSED_DATA_DIR, 'analyzed_artists_data.csv'), index=False)
-        df_yt_age_performance.to_csv(os.path.join(PROCESSED_DATA_DIR, 'analyzed_yt_age_performance.csv'), index=False)
-        df_sp_age_performance.to_csv(os.path.join(PROCESSED_DATA_DIR, 'analyzed_sp_age_performance.csv'), index=False)
-        df_genre_metrics.to_csv(os.path.join(PROCESSED_DATA_DIR, 'analyzed_genre_metrics.csv'), index=False)
-
-        print("\n--- Analyzed Artist Data Sample ---")
-        print(df_analyzed_artists[['artist_name', 'combined_popularity_index', 'primary_genre', 'norm_spotify_popularity', 'norm_yt_subscribers', 'avg_yt_content_per_month']].sort_values(by='combined_popularity_index', ascending=False).head())
-        
-        print("\n--- YouTube Performance by Age Category Sample ---")
-        print(df_yt_age_performance.head())
-
-        print("\n--- Spotify Performance by Age Category Sample ---")
-        print(df_sp_age_performance.head())
-
-        print("\n--- Genre Metrics Sample ---")
-        print(df_genre_metrics.head())
+    if df_artists.empty or df_content.empty:
+        print("No cleaned data, aborting.")
     else:
-        print("Skipping analysis due to no cleaned data.")
+        df_artists_final, yt_age_perf, genre_metrics = perform_analysis(df_artists, df_content)
+        print("\nAnalysis complete.")
