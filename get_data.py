@@ -204,8 +204,6 @@ ARTISTS_TO_ANALYZE = [
 ]
 
 # ----------------------------------------------------------------------------------
-# 🔥 Main collection function (Spotify code REMOVED)
-# ----------------------------------------------------------------------------------
 
 def collect_and_save_data(artists_list, timestamp):
 
