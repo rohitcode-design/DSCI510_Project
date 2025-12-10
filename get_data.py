@@ -200,8 +200,14 @@ ARTISTS_TO_ANALYZE = [
     {"name": "NBA YoungBoy", "tiktok_tag": "nbayoungboy", "youtube_channel_id": "UCNofc_JcK-0FfdJ_YkE6VBg"},
     {"name": "Adele", "tiktok_tag": "adele", "youtube_channel_id": "UCRw-9o3C02JkL4o1CjDkywA"},
     {"name": "Bad Bunny", "tiktok_tag": "badbunny", "youtube_channel_id": "UCgCHiixL-q7L5_Fv2EaV3-w"},
-    {"name": "Billie Eilish", "tiktok_tag": "billieeilish", "youtube_channel_id": "UCiGm_E4ZwYVaeYBjfK6edYA"}
+    {"name": "Billie Eilish", "tiktok_tag": "billieeilish", "youtube_channel_id": "UCiGm_E4ZwYVaeYBjfK6edYA"},
+    {"name": "Drake", "tiktok_tag": "drake", "youtube_channel_id": "UCByOQJjav0CUDwxCk-jVNRQ"},
+    {"name": "The Weeknd", "tiktok_tag": "theweeknd", "youtube_channel_id": "UC0WP5P-ufpRfjbNrmOWwLBQ"},
+    {"name": "Doja Cat", "tiktok_tag": "dojacat", "youtube_channel_id": "UCzvK5p4gGg9Q2HfKF3Ab4Qw"},
+    {"name": "Post Malone", "tiktok_tag": "postmalone", "youtube_channel_id": "UC3gK4uQkzkG4gQ2vRGLcH3A"},
+    {"name": "Kendrick Lamar", "tiktok_tag": "kendricklamar", "youtube_channel_id": "UC3lBXkFNkSgWunf6Z64MfKQ"}
 ]
+
 
 # ----------------------------------------------------------------------------------
 
