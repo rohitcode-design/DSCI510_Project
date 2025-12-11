@@ -37,7 +37,7 @@
     
     ```
     # .env file example
-    YOUTUBE_API_KEY="your_youtube_api_key"
+    YOUTUBE_API_KEY="AIzaSyCzy7w8fwDdk9AOy9gJ5ZHGRUN0As4aKP4"
     ```
     The `python-dotenv` library will automatically load this when the scripts run.
 
