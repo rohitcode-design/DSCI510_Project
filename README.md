@@ -5,7 +5,7 @@
 * **USC ID:** 1678028702
 * **GitHub:** henryyu528
 * **Name:** Rohit Praveen
-* * **USC ID:** 
+* **USC ID:** 6393931049
 * **GitHub:** rohit-design
 
 ## Project Overview
