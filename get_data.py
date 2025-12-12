@@ -1,55 +1,31 @@
-# src/get_data.py
 import os
+import sys
 import time
 import re
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Selenium (For TikTok)
+# Add project root to path so we can import utils
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from utils.config import ARTISTS_TO_ANALYZE, RAW_DATA_DIR
+
+# Selenium
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 
-# Google API (For YouTube)
+# Google API
 from googleapiclient.discovery import build
 
-# -------------------------------------------------
-#  CONFIGURATION
-# -------------------------------------------------
-load_dotenv() # Load variables from .env file
-
+# Load Environment Variables
+load_dotenv()
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
-# Directories
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RAW_DATA_DIR = os.path.join(BASE_DIR, "../data/raw")
-os.makedirs(RAW_DATA_DIR, exist_ok=True)
-
-# The 10 Artists
-ARTISTS_TO_ANALYZE = [
-    {"name": "Taylor Swift", "tiktok_tag": "taylorswift", "youtube_channel_id": "UCqfmriSjJ_k4C8W6J_k7J_g"},
-    {"name": "NBA YoungBoy", "tiktok_tag": "nbayoungboy", "youtube_channel_id": "UCNofc_JcK-0FfdJ_YkE6VBg"},
-    {"name": "Adele", "tiktok_tag": "adele", "youtube_channel_id": "UCRw-9o3C02JkL4o1CjDkywA"},
-    {"name": "Bad Bunny", "tiktok_tag": "badbunny", "youtube_channel_id": "UCgCHiixL-q7L5_Fv2EaV3-w"},
-    {"name": "Billie Eilish", "tiktok_tag": "billieeilish", "youtube_channel_id": "UCiGm_E4ZwYVaeYBjfK6edYA"},
-    {"name": "Drake", "tiktok_tag": "drake", "youtube_channel_id": "UCByOQJjavOCUDwxCk-jVNRQ"},
-    {"name": "The Weeknd", "tiktok_tag": "theweeknd", "youtube_channel_id": "UCOWP5P-ufpRfjbNrmOWwLBQ"},
-    {"name": "Doja Cat", "tiktok_tag": "dojacat", "youtube_channel_id": "UCzvK5p4gGg9Q2HfKF3Ab4Qw"},
-    {"name": "Post Malone", "tiktok_tag": "postmalone", "youtube_channel_id": "UC3gK4uQkzkG4gQ2vRGLCH3A"},
-    {"name": "Kendrick Lamar", "tiktok_tag": "kendricklamar", "youtube_channel_id": "UC31BXkFNkSgWunf6Z64MfKQ"}
-]
-
-# -------------------------------------------------
-#  TIKTOK SCRAPER (SELENIUM MANUAL ASSIST)
-# -------------------------------------------------
+# --- TIKTOK SCRAPER ---
 def scrape_tiktok_selenium(hashtag):
-    """
-    Opens a browser for the user to manually verify the page.
-    Extracts the 'Post Count' (e.g., '21.5M posts').
-    """
     url = f"https://www.tiktok.com/tag/{hashtag}" 
     print(f"\n[TikTok] Launching browser for #{hashtag}...")
 
@@ -62,102 +38,86 @@ def scrape_tiktok_selenium(hashtag):
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
         driver.get(url)
         
-        # --- MANUAL USER CONFIRMATION ---
-        print(f"  >>> ACTION NEEDED: Check the Chrome window.")
-        print(f"  1. Close any 'Shop' or 'Login' popups.")
-        print(f"  2. Verify you see the number of posts (e.g. '21.5M posts').")
-        input(f"  >>> PRESS ENTER HERE when the page is ready for #{hashtag} <<<")
+        print(f"  >>> ACTION NEEDED: Check the browser window.")
+        print(f"  1. Close 'Shop'/'Login' popups.")
+        print(f"  2. Verify you see the post count (e.g. '21.5M posts').")
+        input(f"  >>> PRESS ENTER HERE when ready for #{hashtag} <<<")
         
-        # Scrape
-        print("  [Scraping] Reading page text...")
         body_text = driver.find_element(By.TAG_NAME, "body").text
-        
-        # Regex to find "21.5M posts"
         match = re.search(r'(\d[\d\.]*[KMB]?)\s+posts', body_text, re.IGNORECASE)
         
         if match:
-            raw_string = match.group(1).upper()
-            print(f"  [Success] Found: {raw_string}")
-            
-            multiplier = 1
-            if 'B' in raw_string: multiplier = 1_000_000_000
-            elif 'M' in raw_string: multiplier = 1_000_000
-            elif 'K' in raw_string: multiplier = 1_000
-            
-            clean_str = re.sub(r'[^\d\.]', '', raw_string.replace('B','').replace('M','').replace('K',''))
-            post_count = int(float(clean_str) * multiplier)
-            return post_count
+            raw = match.group(1).upper()
+            print(f"  [Success] Found: {raw}")
+            mult = 1
+            if 'B' in raw: mult = 1_000_000_000
+            elif 'M' in raw: mult = 1_000_000
+            elif 'K' in raw: mult = 1_000
+            clean = re.sub(r'[^\d\.]', '', raw.replace('B','').replace('M','').replace('K',''))
+            return int(float(clean) * mult)
         else:
-            print("  [Error] Could not find 'X posts' text.")
+            print("  [Error] Could not find 'posts' text.")
             return 0
-
     except Exception as e:
         print(f"  [Error] {e}")
         return 0
     finally:
-        if driver:
-            driver.quit()
+        if driver: driver.quit()
 
-# -------------------------------------------------
-#  YOUTUBE SCRAPER
-# -------------------------------------------------
-def get_youtube_data(api_key, channel_id):
-    if not api_key:
-        print("  [YouTube] No API Key provided (Skipping)")
-        return {'view_count': 0, 'subscriber_count': 0}
-        
-    try:
-        yt = build('youtube', 'v3', developerKey=api_key)
-        chan_resp = yt.channels().list(part='statistics', id=channel_id).execute()
-        if not chan_resp['items']: return None
-        
-        stats = chan_resp['items'][0]['statistics']
-        return {
-            'view_count': int(stats.get('viewCount', 0)),
-            'subscriber_count': int(stats.get('subscriberCount', 0))
-        }
-    except Exception as e:
-        print(f"  [YouTube] Error: {e}")
-        return {'view_count': 0, 'subscriber_count': 0}
-
-# -------------------------------------------------
-#  MAIN EXECUTION
-# -------------------------------------------------
-def run_collection():
+# --- YOUTUBE SCRAPER (Self-Healing) ---
+def get_youtube_data(channel_id, artist_name):
     if not YOUTUBE_API_KEY:
-        print("WARNING: YOUTUBE_API_KEY is not set in .env. YouTube data will be empty.")
+        print("  [YouTube] No API Key found in .env")
+        return {'view_count': 0, 'subscriber_count': 0}
 
-    all_data = []
-    print("Starting data collection...")
+    youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+    
+    # Try ID First
+    try:
+        req = youtube.channels().list(part='statistics', id=channel_id)
+        resp = req.execute()
+        if 'items' in resp and resp['items']:
+            stats = resp['items'][0]['statistics']
+            print(f"  [YouTube] Success! {int(stats['viewCount']):,} views.")
+            return {
+                'view_count': int(stats.get('viewCount', 0)),
+                'subscriber_count': int(stats.get('subscriberCount', 0))
+            }
+    except Exception as e:
+        print(f"  [YouTube] ID Warning: {e}")
 
-    for artist in ARTISTS_TO_ANALYZE:
-        name = artist['name']
-        print(f"\n========== Processing: {name} ==========")
-        
-        # 1. TikTok (Manual Assist)
-        tiktok_posts = scrape_tiktok_selenium(artist['tiktok_tag'])
-        
-        # 2. YouTube
-        yt_stats = get_youtube_data(YOUTUBE_API_KEY, artist['youtube_channel_id'])
-        
-        # Combine
-        summary = {
-            'artist': name,
-            'tiktok_post_count': tiktok_posts,
-            'youtube_total_views': yt_stats.get('view_count', 0),
-            'youtube_subs': yt_stats.get('subscriber_count', 0),
-            'timestamp': datetime.now().isoformat()
-        }
-        all_data.append(summary)
+    # Fallback Search
+    print(f"  [YouTube] ID failed. Searching for '{artist_name}'...")
+    try:
+        search = youtube.search().list(q=artist_name, type='channel', part='id', maxResults=1)
+        resp = search.execute()
+        if resp['items']:
+            new_id = resp['items'][0]['id']['channelId']
+            print(f"  [YouTube] Found new ID: {new_id}. Retrying...")
+            return get_youtube_data(new_id, "STOP_RECURSION") # Prevent infinite loop
+    except Exception as e:
+        print(f"  [YouTube] Search failed: {e}")
 
-    # Save to CSV (Compatible with clean_data.py)
-    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    df = pd.DataFrame(all_data)
-    outfile = os.path.join(RAW_DATA_DIR, f'artists_summary_{timestamp_str}.csv')
-    df.to_csv(outfile, index=False)
-
-    print(f"\nSuccess! Data saved to: {outfile}")
-    print(df)
+    return {'view_count': 0, 'subscriber_count': 0}
 
 if __name__ == "__main__":
-    run_collection()
+    data = []
+    print("Starting Collection...")
+    
+    for artist in ARTISTS_TO_ANALYZE:
+        print(f"\n=== Processing: {artist['name']} ===")
+        tk_posts = scrape_tiktok_selenium(artist['tiktok_tag'])
+        yt_stats = get_youtube_data(artist['youtube_channel_id'], artist['name'])
+        
+        data.append({
+            'artist': artist['name'],
+            'tiktok_post_count': tk_posts,
+            'youtube_total_views': yt_stats['view_count'],
+            'youtube_subs': yt_stats['subscriber_count'],
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    df = pd.DataFrame(data)
+    outfile = os.path.join(RAW_DATA_DIR, f'artists_summary_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+    df.to_csv(outfile, index=False)
+    print(f"\nSaved raw data to: {outfile}")
