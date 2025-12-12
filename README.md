@@ -1,58 +1,54 @@
-# Popularity Analysis of Diverse Musical Artists
+# The Viral Gap: Comparative Analysis of Artist Popularity (YouTube vs. TikTok)
+
+## Team Members
+* **Name:** Henry Yu
+* **USC ID:** 1678028702
+* **GitHub:** henryyu528
+* **Name:** Rohit Praveen
+* * **USC ID:** 
+* **GitHub:** rohit-design
 
 ## Project Overview
-[As per your project proposal's problem statement and objectives]
+This project investigates the correlation between "Legacy Fame" (YouTube Views) and "Viral Relevance" (TikTok Content Creation). By analyzing 10 major artists, we quantify the difference between passive consumption and active user engagement using a custom "Combined Popularity Index."
 
-## Setup and Installation
-1.  **Clone the Repository:**
-    ```bash
-    git clone [https://github.com/your-username/your-repo-name.git](https://github.com/your-username/your-repo-name.git)
-    cd your-repo-name
-    ```
+## Directory Structure
+* `data/`: Stores raw CSVs (from scrapers) and processed CSVs (cleaned/ranked).
+* `src/`: Python source code for collection, cleaning, and visualization.
+* `results/`: Generated charts (PNG) and analysis reports (TXT).
 
-2.  **Prerequisites (Important):**
-    * **Google Chrome:** You must have the Google Chrome browser installed on your machine for the TikTok scraper to work.
-    * **Python 3.10+**
+## Setup & Installation
 
-3.  **Install Dependencies:**
+1.  **Install Dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
-    *(Ensure your `requirements.txt` includes: `selenium`, `webdriver-manager`, `pandas`, `google-api-python-client`, `scikit-learn`, `matplotlib`, `seaborn`, `python-dotenv`)*
 
-4.  **NLTK Data Download:**
-    Open a Python interpreter and run:
-    ```python
-    import nltk
-    nltk.download('punkt')
-    nltk.download('averaged_perceptron_tagger')
-    nltk.download('vader_lexicon')
+2.  **API Configuration:**
+    Create a `.env` file in the root directory and add your YouTube API Key:
+    ```text
+    YOUTUBE_API_KEY="AIzaSy..."
     ```
 
-5.  **API Key Configuration:**
-    This project relies on the YouTube Data API v3. You need to obtain API credentials:
-    * **YouTube:** Get an API Key from [Google Cloud Console](https://console.cloud.google.com/) (enable YouTube Data API v3).
-    
-    Store this key as an environment variable or in a `.env` file in the root of your project:
-    
+## How to Run
+Run the scripts in this order:
+
+1.  **Collect Data:**
+    ```bash
+    python src/get_data.py
     ```
-    # .env file example
-    YOUTUBE_API_KEY="AIzaSyCzy7w8fwDdk9AOy9gJ5ZHGRUN0As4aKP4"
+    *Note: This opens a Chrome window for TikTok. You must manually verify the "Post Count" and press Enter in the terminal for each artist.*
+
+2.  **Clean & Process:**
+    ```bash
+    python src/clean_data.py
     ```
-    The `python-dotenv` library will automatically load this when the scripts run.
 
-## How to Run the Code
+3.  **Run Analysis (Text Report):**
+    ```bash
+    python src/run_analysis.py
+    ```
 
-### 1. Data Collection (`src/get_data.py`)
-This script fetches data from the YouTube Data API and scrapes TikTok hashtag metrics using Selenium.
-
-**Important Note for TikTok Collection:**
-This project uses a **Manual-Assist Selenium Scraper** to bypass TikTok's anti-bot restrictions. When you run the script:
-1.  A **Google Chrome window** will launch automatically for each artist.
-2.  **Action Required:** You must manually close any "Shop" or "Login" popups that appear in the browser.
-3.  Verify that the **Post Count** (e.g., "25.4M posts") is visible on the page.
-4.  Return to your terminal/console and **press Enter** when prompted to confirm the page is ready. The script will then read the data and proceed to the next artist.
-
-To collect data:
-```bash
-python src/get_data.py
+4.  **Generate Visualizations:**
+    ```bash
+    python src/visualize_results.py
+    ```
