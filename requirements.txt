@@ -1,6 +1,10 @@
-spotipy
-google-api-python-client
 pandas
-textblob
-nltk
+requests
+beautifulsoup4
+selenium
+webdriver-manager
+google-api-python-client
 python-dotenv
+scikit-learn
+matplotlib
+seaborn
